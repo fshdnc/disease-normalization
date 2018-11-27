@@ -25,6 +25,7 @@ from .vectorize import load_wemb, Vectorizer
 from .overlap import TokenOverlap
 from ..candidates.generate_candidates import candidate_generator
 from ..util.util import CacheDict, TypeHider, smart_open
+from .elmo import dummy
 
 
 class Sampler:
@@ -127,12 +128,20 @@ class Sampler:
         ranges = []
         weights = []
         samples = []  # holds 9-tuples of arrays
-        for item, numbers in self._itercandidates(subset, oracle):
-            (mention, ref, _), occs = item
-            offset, length = len(samples), len(numbers)
-            ranges.append((offset, offset+length, mention, ref, occs))
-            samples.extend(numbers)
-            weights.extend(len(occs) for _ in range(length))
+        if self.conf.emb_elmo.context:
+            for item, numbers in self._itercandidates(subset, oracle):
+                (mention, ref, context), occs = item
+                offset, length = len(samples), len(numbers)
+                ranges.append((offset, offset+length, mention, ref, occs))
+                samples.extend(numbers)
+                weights.extend(len(occs) for _ in range(length))
+        else:
+            for item, numbers in self._itercandidates(subset, oracle):
+                (mention, ref, _), occs = item
+                offset, length = len(samples), len(numbers)
+                ranges.append((offset, offset+length, mention, ref, occs))
+                samples.extend(numbers)
+                weights.extend(len(occs) for _ in range(length))
         data = DataSet(ranges, weights, *zip(*samples))
         logging.info('generated %d pair-wise samples (%d with duplicates)',
                      len(data.y), sum(data.weights))
