@@ -48,6 +48,7 @@ def _create_generator(value, sampler):
         'hyperonym': HyperonymCandidates,
         'abbreviation': AbbreviationCandidates,
         'composite': CompositeCandidates,
+        'random': RandomCandidates,
     }[name.lower()]
     if args:
         args = ast.literal_eval(args)
