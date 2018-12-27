@@ -24,7 +24,7 @@ from .vectorize import load_wemb, Vectorizer
 from .overlap import TokenOverlap
 from ..candidates.generate_candidates import candidate_generator
 from ..util.util import CacheDict, TypeHider, smart_open, ConfHash
-from .elmo import dummy
+from .elmo import elmo_default
 
 
 class Sampler:
@@ -127,13 +127,50 @@ class Sampler:
         ranges = []
         weights = []
         samples = []  # holds 9-tuples of arrays
-        if self.conf.emb_elmo.context:
-            for item, numbers in self._itercandidates(subset, oracle):
-                (mention, ref, context), occs = item
-                offset, length = len(samples), len(numbers)
-                ranges.append((offset, offset+length, mention, ref, occs))
-                samples.extend(numbers)
-                weights.extend(len(occs) for _ in range(length))
+    ##### The entire if not run, dunno if works or need debugging
+        if self.conf.emb_elmo.use:
+            logging.info('including elmo embedding...')
+            potential_cache_file = str(self.conf.emb_elmo.cached_context_dict) + str(subset)
+            try:    # if the elmo embedding of context has already been saved
+                elmo_context_vectorizer_dictionary = pickle.load(open(potential_cache_file,'rb'))
+                for item, numbers in self._itercandidates(subset, oracle):
+                    (mention, ref, context), occs = item
+                    offset, length = len(samples), len(numbers)
+                    ranges.append((offset, offset+length, mention, ref, occs))
+                #####not sure append or extend
+                    numbers.append(elmo_context_vectorizer_dictionary[context])
+                    samples.extend(numbers)
+                    weights.extend(len(occs) for _ in range(length))
+            except IOError:
+                mentions = []
+                contexts = []
+                for item, numbers in self._itercandidates(subset, oracle):
+                    (mention, ref, context), occs = item
+                    offset, length = len(samples), len(numbers)
+                    ranges.append((offset, offset+length, mention, ref, occs))
+                    samples.extend(numbers)
+                    weights.extend(len(occs) for _ in range(length))
+                    mentions.append(mention)
+                    contexts.append(context)
+                '''
+                import pickle
+                with open('/home/lhchan/disease-normalization/data/elmo/context_lst','wb') as f:
+                    pickle.dump(contexts,f)
+                with open('/home/lhchan/disease-normalization/data/elmo/mention_lst','wb') as f:
+                    pickle.dump(mentions,f)
+                '''
+                context_set = list(set(contexts))
+                # eating too much memory in one go
+                # context_elmo_emb = elmo_default(context_set)
+                chunks = [context_set[x:x+20] for x in range(0, len(context_set), 20)]
+                context_elmo_emb = [c for chunk in elmo_default(chunks) for c in chunk]
+                #context_elmo_emb = [c for chunk in chunks for c in elmo_default(chunk)]
+                elmo_context_vectorizer_dictionary = dict(zip(context_set, context_elmo_emb))
+                import pickle
+                save_to = str(self.conf.emb_elmo.cached_context_dict) + str(subset)
+                with open(save_to,'wb') as f:
+                    pickle.dump(elmo_context_vectorizer_dictionary,f)
+            ##### Get the embedding into samples
         else:
             for item, numbers in self._itercandidates(subset, oracle):
                 (mention, ref, _), occs = item
@@ -141,6 +178,7 @@ class Sampler:
                 ranges.append((offset, offset+length, mention, ref, occs))
                 samples.extend(numbers)
                 weights.extend(len(occs) for _ in range(length))
+        import pdb; pdb.set_trace()
         data = DataSet(ranges, weights, *zip(*samples))
         logging.info('generated %d pair-wise samples (%d with duplicates)',
                      len(data.y), sum(data.weights))
