@@ -194,18 +194,16 @@ class Sampler:
                     candidate = deepcopy(candidate_missing)[:-2]
                     m = deepcopy(candidate_missing)[-1]
                     c = deepcopy(candidate_missing)[-2]
-                    for i,t in zip([0,1],[m,c]):
+                    for t in [m,c]:
                         if isinstance(t,str):
-                            candidate[i].append(elmo_term_vectorizer_dictionary_updated[t])
+                            candidate.append(elmo_term_vectorizer_dictionary_updated[t])
                         else:
-                            candidate[i].append(t)
+                            candidate.append(t)
                     samples.append(tuple(candidate))
+                    # 11-tuple, [-2]=mention_elmo, [-1]=candidate_elmo
             else: # no missing terms
-                for candidate_missing in samples_missing: # reshaping the data for DataSet class
-                    candidate = deepcopy(candidate_missing)[:-2]
-                    for i,t in zip([0,1],[m,c]):
-                        candidate[i].append(t)
-                    samples.append(tuple(candidate))
+                logging.warning('No missing elmo terms. This part of the code not tested. Output data may be in wrong shape.')
+                samples = [tuple(candidate) for candidate in samples_missing]
         else: # elmo not used
             for item, numbers in self._itercandidates(subset, oracle):
                 (mention, ref, _), occs = item
