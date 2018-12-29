@@ -16,6 +16,7 @@ import logging
 import tarfile
 import multiprocessing as mp
 from collections import defaultdict, namedtuple
+from copy import deepcopy
 
 import numpy as np
 
@@ -123,55 +124,89 @@ class Sampler:
                 data.save(f)
         return data
 
+    def elmo_from_dict(self,dict,term,missing):
+        try:
+            return dict[term]
+        except KeyError:
+            missing.append(term)
+            return term
+
     def _samples(self, subset, oracle):
         ranges = []
         weights = []
         samples = []  # holds 9-tuples of arrays
-    ##### The entire if not run, dunno if works or need debugging
-        if self.conf.emb_elmo.use:
+        if self.conf.emb_elmo.mention:
             logging.info('including elmo embedding...')
-            potential_cache_file = str(self.conf.emb_elmo.cached_context_dict) + str(subset)
-            try:    # if the elmo embedding of context has already been saved
-                elmo_context_vectorizer_dictionary = pickle.load(open(potential_cache_file,'rb'))
+            potential_cache_terms = str(self.conf.emb_elmo.use_term_dict)
+            try:
+                '''
+                1. read in cache dict, where key='term' and value=[elmo emb]
+                2. for mentions and candidates that are already keys, use those
+                3. for those that are not, save them in missing_terms and compute the elmo emb for those later
+                '''
+                import pickle
+                elmo_term_vectorizer_dictionary = pickle.load(open(potential_cache_terms,'rb'))
+                logging.info('saved elmo term embedding loaded: %s',potential_cache_terms)
+                missing_terms = []
                 for item, numbers in self._itercandidates(subset, oracle):
                     (mention, ref, context), occs = item
                     offset, length = len(samples), len(numbers)
                     ranges.append((offset, offset+length, mention, ref, occs))
-                #####not sure append or extend
-                    numbers.append(elmo_context_vectorizer_dictionary[context])
+                    mention_elmo = self.elmo_from_dict(elmo_term_vectorizer_dictionary,mention,missing_terms)
+                    for candidate in numbers:
+                        candidate.extend([self.elmo_from_dict(elmo_term_vectorizer_dictionary,candidate[7],missing_terms),mention_elmo])
                     samples.extend(numbers)
                     weights.extend(len(occs) for _ in range(length))
-            except IOError:
-                mentions = []
-                contexts = []
+            except IOError: # no previously saved dict
+                missing_terms = []
                 for item, numbers in self._itercandidates(subset, oracle):
                     (mention, ref, context), occs = item
                     offset, length = len(samples), len(numbers)
                     ranges.append((offset, offset+length, mention, ref, occs))
+                    missing_terms.append(mention)
+                    for candidate in numbers:
+                        missing_terms.append(candidate[7])
+                        candidate.extend([candidate[7],mention])
                     samples.extend(numbers)
-                    weights.extend(len(occs) for _ in range(length))
-                    mentions.append(mention)
-                    contexts.append(context)
-                '''
-                import pickle
-                with open('/home/lhchan/disease-normalization/data/elmo/context_lst','wb') as f:
-                    pickle.dump(contexts,f)
-                with open('/home/lhchan/disease-normalization/data/elmo/mention_lst','wb') as f:
-                    pickle.dump(mentions,f)
-                '''
-                context_set = list(set(contexts))
-                # eating too much memory in one go
-                # context_elmo_emb = elmo_default(context_set)
-                chunks = [context_set[x:x+20] for x in range(0, len(context_set), 20)]
-                context_elmo_emb = [c for chunk in elmo_default(chunks) for c in chunk]
-                #context_elmo_emb = [c for chunk in chunks for c in elmo_default(chunk)]
-                elmo_context_vectorizer_dictionary = dict(zip(context_set, context_elmo_emb))
-                import pickle
-                save_to = str(self.conf.emb_elmo.cached_context_dict) + str(subset)
-                with open(save_to,'wb') as f:
-                    pickle.dump(elmo_context_vectorizer_dictionary,f)
-            ##### Get the embedding into samples
-        else:
+                    weights.extend(len(occs) for _ in range(length))    
+            if len(missing_terms)!=0: # resolve missing terms
+####produce elmo embedding, for (1) new dict, (2) supplementary dict
+#import pdb; pdb.set_trace()
+                logging.info('generating elmo term embedding...')
+                missing_terms = list(set(missing_terms))
+                t_b = self.conf.emb_elmo.term_processing_batch
+                chunks = [missing_terms[x:x+t_b] for x in range(0, len(missing_terms), t_b)]
+                term_elmo_emb = [c for chunk in elmo_default(chunks) for c in chunk]
+                elmo_term_vectorizer_dictionary_missing = dict(zip(missing_terms, term_elmo_emb))
+                try:
+                    elmo_term_vectorizer_dictionary_updated = {**elmo_term_vectorizer_dictionary, **elmo_term_vectorizer_dictionary_missing}
+                except NameError:
+                    elmo_term_vectorizer_dictionary_updated = elmo_term_vectorizer_dictionary_missing
+                if self.conf.emb_elmo.save_term:
+                    import pickle
+                    save_to = str(self.conf.emb_elmo.save_term_dict)
+                    logging.info('updated dictionary saved to %s',save_to)
+                    with open(save_to,'wb') as f:
+                        pickle.dump(elmo_term_vectorizer_dictionary_updated,f)
+                samples_missing = deepcopy(samples)
+                samples = []
+                for candidate_missing in samples_missing: # reshaping the data for DataSet class
+                    candidate = deepcopy(candidate_missing)[:-2]
+                    m = deepcopy(candidate_missing)[-1]
+                    c = deepcopy(candidate_missing)[-2]
+                    for i,t in zip([0,1],[m,c]):
+                        if isinstance(t,str):
+                            candidate[i].append(elmo_term_vectorizer_dictionary_updated[t])
+                        else:
+                            candidate[i].append(t)
+                    samples.append(tuple(candidate))
+            else: # no missing terms
+                for candidate_missing in samples_missing: # reshaping the data for DataSet class
+                    candidate = deepcopy(candidate_missing)[:-2]
+                    for i,t in zip([0,1],[m,c]):
+                        candidate[i].append(t)
+                    samples.append(tuple(candidate))
+        else: # elmo not used
             for item, numbers in self._itercandidates(subset, oracle):
                 (mention, ref, _), occs = item
                 offset, length = len(samples), len(numbers)
@@ -430,7 +465,7 @@ def _task(items, oracle, cand_gen, vectorizers):
     Returns:
         iter(list(tuple))
             Yield a list of samples for each mention.
-            Each sample is a 9-tuple
+            Each sample is a 9-list
             <x_q, x_a, ctxt_q, ctxt_a, scores, overlap, y, cand, ids>.
     '''
     overlap = TokenOverlap()
@@ -444,7 +479,7 @@ def _task(items, oracle, cand_gen, vectorizers):
         for cand, score, ctxt_a, label in samples:
             vec_a = _vectorize(cand, 'mention')
             ctxt_a = _vectorize(ctxt_a, 'context')
-            data.append((
+            data.append([
                 vec_q,
                 vec_a,
                 ctxt_q,
@@ -454,5 +489,5 @@ def _task(items, oracle, cand_gen, vectorizers):
                 (float(label),),
                 cand,
                 cand_gen.terminology.ids([cand]),
-            ))
+            ])
         yield data

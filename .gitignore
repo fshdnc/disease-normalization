@@ -1,6 +1,9 @@
 # notes
 gitig_*
 
+# messy versions of adding elmo
+tzlink/preprocessing/elmo_temp_file.py
+
 # Large blobs and externally licensed data
 data/
 

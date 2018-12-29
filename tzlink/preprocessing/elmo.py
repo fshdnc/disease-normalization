@@ -17,7 +17,8 @@ def elmo_default(context_lst_chunks):
         # The input tensor is a string tensor with shape [batch_size].
         # The module tokenizes each string by splitting on spaces.
         
-        logging.info('running %s tensorflow sessions...', len(context_lst_chunks))
+        count = 0
+        logging.info('running %s tensorflow session(s)...', len(context_lst_chunks))
         for context_lst in context_lst_chunks:
             # Format of context_lst: ["the cat is on the mat", "dogs are in the fog"]
             embeddings = elmo(
@@ -28,6 +29,8 @@ def elmo_default(context_lst_chunks):
                 sess.run(tf.global_variables_initializer())
                 sess.run(tf.tables_initializer())
                 #print(sess.run(embeddings))
+                logging.info('%s done',str(count/len(context_lst_chunks)))
+                count+= 1
                 yield sess.run(embeddings)
 
 '''
@@ -66,3 +69,5 @@ with tf.Graph().as_default():
             log.info('machine still alive: %s',count)
             count += 1
 '''
+
+
